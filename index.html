@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Simon Task (Mobile-Friendly, 25 Trials)</title>
+  <style>
+    :root{
+      --bg:#0b0d12;
+      --card:#121621;
+      --border:#2a3346;
+      --text:#f2f5f9;
+      --muted:#9aa3b2;
+    }
+    *{box-sizing:border-box}
+    body { margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial; background:var(--bg); color:var(--text); display:flex; justify-content:center; align-items:center; min-height:100vh; padding:16px;}
+    .card { max-width:680px; width:100%; background:var(--card); padding:20px; border-radius:16px; box-shadow:0 6px 18px rgba(0,0,0,.5); }
+    h1{margin:0 0 6px; font-size:1.35rem;}
+    p{margin:8px 0 0; color:var(--muted);}
+    .btn { background:#1d273d; border:1px solid var(--border); color:#fff; padding:12px 16px; border-radius:12px; cursor:pointer; font-weight:700; font-size:1rem; }
+    .btn:active{ filter:brightness(1.15); }
+    .kbd { border:1px solid var(--border); background:#0f1422; padding:2px 8px; border-radius:6px; }
+    .row{ display:flex; gap:12px; flex-wrap:wrap; align-items:center; }
+    .stage { height:240px; display:grid; place-items:center; position:relative; margin:18px 0; border:1px dashed var(--border); border-radius:12px; touch-action:manipulation; }
+    .fixation{ font-size:40px; }
+    .stimulus{ position:absolute; width:74px; height:74px; border-radius:10px; }
+    .left{ left:12%; }
+    .right{ right:12%; }
+    .hidden{ display:none !important; }
+    table{ width:100%; border-collapse:collapse; margin-top:8px; }
+    td,th{ padding:10px 8px; border-bottom:1px solid var(--border); text-align:left; font-size:0.95rem; }
+    #score{ margin-top:12px; font-size:1.05rem; font-weight:700; }
+    #touchControls{ display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:8px; }
+    .btn-big{ padding:16px; font-size:1.05rem; border-radius:14px; }
+    .sub{ font-size:0.9rem; color:var(--muted); }
+    @media (max-width:520px){
+      .stage{ height:220px; }
+      #touchBar{ position:sticky; bottom:0; background:linear-gradient(180deg, rgba(18,22,33,0), var(--card)); padding-top:8px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="card" role="main">
+    <h1>Simon Task — 25 Trials (Mobile-Friendly)</h1>
+    <p>Rule: <span class="kbd">F</span> = <b>Blue</b> (Left), <span class="kbd">J</span> = <b>Orange</b> (Right). Respond to the <strong>color</strong>, ignore the position.</p>
+    <div class="row" style="margin-top:10px;">
+      <button id="btnStart" class="btn" aria-label="Start">Start</button>
+      <span class="sub">On computer: use F / J keys; on mobile: use the buttons below.</span>
+    </div>
+
+    <div id="stage" class="stage" aria-live="polite">
+      <div id="fixation" class="fixation hidden">+</div>
+      <div id="stim" class="stimulus hidden" aria-label="Stimulus"></div>
+      <div id="prompt">Click “Start” to begin</div>
+      <button id="tapLeft" class="hidden" aria-label="Left tap" style="position:absolute;left:0;top:0;bottom:0;width:50%;opacity:0;"></button>
+      <button id="tapRight" class="hidden" aria-label="Right tap" style="position:absolute;right:0;top:0;bottom:0;width:50%;opacity:0;"></button>
+    </div>
+
+    <div id="touchBar">
+      <div id="touchControls" aria-label="Touch controls">
+        <button id="btnBlue"  class="btn btn-big" aria-label="F">F</button>
+        <button id="btnOrange" class="btn btn-big" aria-label="J">J</button>
+      </div>
+    </div>
+
+    <div id="results" class="hidden" aria-live="polite">
+      <h3>Results Summary</h3>
+      <table>
+        <thead><tr><th>Condition</th><th>Mean RT (ms)</th><th>Error Rate</th></tr></thead>
+        <tbody id="summaryBody"></tbody>
+      </table>
+      <div id="score"></div>
+      <p><b>Interpretation:</b> Reaction time is the average speed; error rate is the proportion of incorrect or missed responses. Typically, <i>congruent trials</i> (position matches correct side) are faster and more accurate, while <i>incongruent trials</i> are slower and more error-prone.</p>
+    </div>
+  </div>
+
+<script>
+(function(){
+  const CONFIG = {
+    trials: 25,
+    fixationMs: 500,
+    stimTimeoutMs: 1500,
+    itiMs: 700,
+    colors: { blue: '#4da3ff', orange: '#ff9a4d' },
+    keymap: { blue:'f', orange:'j' }
+  };
+
+  const state = { trialList:[], idx:0, awaiting:false, tStimOn:0, data:[] };
+  const fixation=document.getElementById('fixation');
+  const stim=document.getElementById('stim');
+  const prompt=document.getElementById('prompt');
+  const results=document.getElementById('results');
+  const summaryBody=document.getElementById('summaryBody');
+  const scoreEl=document.getElementById('score');
+  const btnStart=document.getElementById('btnStart');
+  const btnBlue=document.getElementById('btnBlue');
+  const btnOrange=document.getElementById('btnOrange');
+  const tapLeft=document.getElementById('tapLeft');
+  const tapRight=document.getElementById('tapRight');
+
+  btnStart.addEventListener('click', start);
+  btnBlue.addEventListener('click', ()=>handleTouch('f'));
+  btnOrange.addEventListener('click', ()=>handleTouch('j'));
+
+  btnBlue.addEventListener('touchstart', (e)=>{ e.preventDefault(); handleTouch('f'); }, {passive:false});
+  btnOrange.addEventListener('touchstart', (e)=>{ e.preventDefault(); handleTouch('j'); }, {passive:false});
+
+  function handleTouch(key){
+    if(!state.awaiting) return;
+    record(key);
+  }
+
+  function buildTrials(n){
+    const arr=[]; const colors=['blue','orange'];
+    while(arr.length<n){
+      const color=colors[Math.floor(Math.random()*2)];
+      const respSide=color==='blue'?'left':'right';
+      const congruent=Math.random()<0.5; 
+      const pos= congruent? respSide : (respSide==='left'?'right':'left');
+      arr.push({color,pos,congruent});
+    }
+    return arr;
+  }
+
+  function start(){
+    state.idx=0; state.data=[];
+    state.trialList=buildTrials(CONFIG.trials);
+    prompt.classList.add('hidden');
+    results.classList.add('hidden');
+    runNext();
+  }
+
+  function runNext(){
+    if(state.idx>=state.trialList.length){ finish(); return; }
+    const tr=state.trialList[state.idx];
+    showFixation();
+    setTimeout(()=>{
+      showStim(tr);
+      state.awaiting=true;
+      state.tStimOn=performance.now();
+      tapLeft.classList.remove('hidden');
+      tapRight.classList.remove('hidden');
+      state.to=setTimeout(()=>{ if(state.awaiting) record(null,true); }, CONFIG.stimTimeoutMs);
+    },CONFIG.fixationMs);
+  }
+
+  function showFixation(){ fixation.classList.remove('hidden'); stim.classList.add('hidden'); }
+  function showStim(tr){
+    fixation.classList.add('hidden');
+    stim.className='stimulus '+tr.pos;
+    stim.style.background=CONFIG.colors[tr.color];
+    stim.classList.remove('hidden');
+  }
+  function hideAll(){ fixation.classList.add('hidden'); stim.classList.add('hidden'); tapLeft.classList.add('hidden'); tapRight.classList.add('hidden'); }
+
+  function record(key,timeout=false){
+    state.awaiting=false; clearTimeout(state.to);
+    const tr=state.trialList[state.idx];
+    const rt=timeout?null:Math.round(performance.now()-state.tStimOn);
+    const correctKey=CONFIG.keymap[tr.color];
+    const correct=!timeout && key===correctKey;
+    state.data.push({color:tr.color,pos:tr.pos,congruent:tr.congruent,key,correct,timeout,rt});
+    state.idx++;
+    hideAll();
+    setTimeout(runNext,CONFIG.itiMs);
+  }
+
+  window.addEventListener('keydown',e=>{
+    if(!state.awaiting) return;
+    const k=e.key.toLowerCase();
+    if(k==='f'||k==='j') record(k);
+  });
+
+  tapLeft.addEventListener('click', ()=>{
+    if(!state.awaiting) return;
+    const tr=state.trialList[state.idx];
+    const leftKey='f'; 
+    const rightKey='j'; 
+    const correctSide = tr.color==='blue' ? 'left' : 'right';
+    record(correctSide==='left'? leftKey : rightKey);
+  });
+  tapRight.addEventListener('click', ()=>{
+    if(!state.awaiting) return;
+    const tr=state.trialList[state.idx];
+    const leftKey='f', rightKey='j';
+    const correctSide = tr.color==='blue' ? 'left' : 'right';
+    record(correctSide==='right'? rightKey : leftKey);
+  });
+
+  function finish(){
+    hideAll();
+    results.classList.remove('hidden');
+    const trials=state.data.filter(d=>!d.timeout);
+    const congruent=trials.filter(t=>t.congruent);
+    const incongruent=trials.filter(t=>!t.congruent);
+    function stats(arr){
+      if(!arr.length) return {rt:'-',err:'-'};
+      const mean=Math.round(arr.reduce((s,a)=>s+a.rt,0)/arr.length);
+      const err=((arr.filter(a=>!a.correct).length/arr.length)*100).toFixed(1)+'%';
+      return {rt:mean,err};
+    }
+    const rows=[
+      ['Congruent',stats(congruent)],
+      ['Incongruent',stats(incongruent)],
+      ['All',stats(trials)]
+    ].map(([n,s])=>`<tr><td>${n}</td><td>${s.rt}</td><td>${s.err}</td></tr>`).join('');
+    summaryBody.innerHTML=rows;
+
+    const corrects=state.data.filter(d=>d.correct).length;
+    const score=Math.round((corrects/state.data.length)*100);
+    scoreEl.textContent=`Overall Accuracy: ${score}%`;
+    results.scrollIntoView({behavior:'smooth', block:'start'});
+  }
+})();
+</script>
+</body>
+</html>
